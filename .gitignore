@@ -3,3 +3,20 @@ vrchat_session.json
 config.json
 cache/avatar_data.json
 avatar_data.json
+*.exe
+*.d
+*.rar
+prismic_avatar_search/target/release/unified_avatar_manager.pdb
+/prismic_avatar_search/target
+/old/old rust standalone app/rust_gui/vrc_login_gui/target
+/old/old rust standalone app/rust_gui/avatar_browser_gui/target
+/old/old rust standalone app/rust_gui/testing/database_decoder/target
+/old/old rust standalone app/rust_gui/database_downloader_formater/target
+*.lock
+old/old rust standalone app/rust_gui/database_downloader_formater/cache/avatar_entries.ndjson
+old/old rust standalone app/rust_gui/database_downloader_formater/cache/cache_meta.json
+/old/old rust standalone app/rust_gui/testing/database_decoder/cache
+prismic_avatar_search/cache/avatar_entries.ndjson
+*.txt
+*.json
+*.ndjson

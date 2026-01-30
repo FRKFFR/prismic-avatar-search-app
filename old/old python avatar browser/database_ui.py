@@ -9,6 +9,38 @@ import struct
 import os
 from pathlib import Path
 import time
+import shutil
+import subprocess
+import sys
+
+
+def run_rust_downloader(extra_args: Optional[List[str]] = None) -> int:
+    """Launch the Rust GUI downloader, building it if necessary."""
+    project_dir = Path(__file__).resolve().parent / "rust_gui"
+    if not project_dir.exists():
+        raise SystemExit(f"Rust project directory not found: {project_dir}")
+
+    binary_name = "vrchat_avatar_gui.exe" if os.name == "nt" else "vrchat_avatar_gui"
+    binary_path = project_dir / "target" / "release" / binary_name
+
+    cmd: List[str]
+    if binary_path.exists():
+        cmd = [str(binary_path)]
+    else:
+        cargo = shutil.which("cargo")
+        if cargo is None:
+            raise SystemExit("Rust toolchain (cargo) is required but was not found in PATH.")
+        cmd = [cargo, "run", "--release", "--"]
+
+    if extra_args:
+        cmd.extend(extra_args)
+
+    print(f"Launching Rust downloader via: {' '.join(cmd)}")
+    try:
+        completed = subprocess.run(cmd, cwd=project_dir, check=True)
+        return completed.returncode
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"Rust downloader exited with code {exc.returncode}") from exc
 
 class DatabaseUI:
     def __init__(self):
@@ -186,12 +218,13 @@ class AvatarDatabase:
         self.cache_dir.mkdir(exist_ok=True)
 
     def decode_avatar_id(self, crypt: bytes, iv: bytes) -> str:
-        # XOR decryption of 16 bytes
-        decoded = [crypt[i] ^ iv[i] for i in range(16)]
-
-        # Convert to hex
+        # Process each byte with XOR operations including static_bytes
+        decoded = []
+        for i in range(16):
+            decoded.append(crypt[i] ^ iv[i] ^ self.static_bytes[i])
+        
+        # Convert to hex and reverse each byte
         hex_bytes = [f"{x:02x}" for x in decoded]
-
         # Format as proper UUID (8-4-4-4-12)
         uuid = (
             f"{''.join(hex_bytes[0:4])}-"

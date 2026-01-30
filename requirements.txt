@@ -1,8 +1,0 @@
-requests>=2.31.0
-pillow>=10.0.0
-tkinter>=8.6.0
-concurrent.futures>=3.0.0
-pathlib>=1.0.1
-typing>=3.7.4.3
-tqdm>=4.65.0
-webbrowser>=3.10.0
