@@ -5,16 +5,23 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 eframe = "0.26"
 egui_extras = "0.26"
 env_logger = "0.11"
 flume = "0.11"
+futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 log = "0.4"
 open = "5.1"
 regex = "1.11"
 reqwest = { version = "0.11", default-features = false, features = ["json", "blocking", "rustls-tls", "cookies"] }
+rusqlite = { version = "0.30", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.8"
 thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+toml = "0.8"
+zstd = "0.13"
+zip = "0.6"

@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports, unused_variables, unused_mut)]
+
 mod database_downloader_gui;
 mod login_gui;
 mod avatar_browser_gui;
@@ -5,8 +7,11 @@ mod avatar_browser_gui;
 use database_downloader_gui::{AppState as DatabaseState, UiMessage as DatabaseMessage};
 use login_gui::{AppState as LoginState, WorkerResponse as LoginMessage};
 use avatar_browser_gui::{AvatarBrowserApp as BrowserState};
-
+use anyhow::Result;
 use eframe::egui;
+use flume;
+use tokio;
+
 use std::path::Path;
 
 enum AppState {

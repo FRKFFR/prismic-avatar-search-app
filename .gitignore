@@ -13,10 +13,22 @@ prismic_avatar_search/target/release/unified_avatar_manager.pdb
 /old/old rust standalone app/rust_gui/testing/database_decoder/target
 /old/old rust standalone app/rust_gui/database_downloader_formater/target
 *.lock
+!**/Cargo.lock
 old/old rust standalone app/rust_gui/database_downloader_formater/cache/avatar_entries.ndjson
 old/old rust standalone app/rust_gui/database_downloader_formater/cache/cache_meta.json
 /old/old rust standalone app/rust_gui/testing/database_decoder/cache
 prismic_avatar_search/cache/avatar_entries.ndjson
 *.txt
+# Ignore general data json, but keep project configs
 *.json
+!package*.json
+!tsconfig*.json
+!tauri*.json
+!*.config.json
+!.oxlintrc.json
+!**/capabilities/*.json
 *.ndjson
+/prismic_avatar_search/cache
+prismic_avatar_search/config.toml*
+NUL
+**/NUL

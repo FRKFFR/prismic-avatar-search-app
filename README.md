@@ -117,7 +117,7 @@ brew install rust
 #### **Method 1: Using Cargo (Recommended)**
 ```bash
 # Navigate to the project directory
-cd C:\Users\scomt\Documents\GitHub\python-prism\prismic_avatar_search
+cd prismic-avatar-search-app
 
 # Compile and run in release mode (optimized)
 cargo run --release

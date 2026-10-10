@@ -473,7 +473,7 @@ impl AppState {
 }
 
 impl eframe::App for AppState {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_worker(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
