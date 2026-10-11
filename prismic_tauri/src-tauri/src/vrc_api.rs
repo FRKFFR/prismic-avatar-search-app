@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::header::{HeaderMap, HeaderValue, COOKIE, USER_AGENT};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -14,6 +15,35 @@ use crate::models::{AvatarOnlineDetails, LoginResponse, UserProfile};
 
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 const APP_USER_AGENT: &str = "VRChatAvatarGUI/0.1";
+
+// Same set as JavaScript's encodeURIComponent; VRChat requires credentials encoded this way before Basic auth.
+const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'!')
+    .remove(b'~')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
+
+fn encode_credential(value: &str) -> String {
+    utf8_percent_encode(value, URI_COMPONENT).to_string()
+}
+
+async fn api_error_message(res: reqwest::Response) -> String {
+    let status = res.status();
+    let message = res
+        .json::<Value>()
+        .await
+        .ok()
+        .and_then(|v| v.pointer("/error/message").and_then(|m| m.as_str()).map(|m| m.trim_matches('"').to_string()));
+    match message {
+        Some(m) if !m.is_empty() => format!("{} (HTTP {})", m, status.as_u16()),
+        _ => format!("HTTP {}", status),
+    }
+}
 
 pub struct VrcApiClient {
     client: Client,
@@ -55,7 +85,7 @@ impl VrcApiClient {
             .client
             .get(format!("{}/auth/user", API_BASE))
             .header(USER_AGENT, APP_USER_AGENT)
-            .basic_auth(username, Some(password))
+            .basic_auth(encode_credential(username), Some(encode_credential(password)))
             .send()
             .await?;
 
@@ -66,7 +96,7 @@ impl VrcApiClient {
                 two_factor_type: None,
                 auth_cookie: None,
                 user: None,
-                error: Some(format!("Login failed: HTTP {}", res.status())),
+                error: Some(format!("Login failed: {}", api_error_message(res).await)),
             });
         }
 
@@ -127,7 +157,7 @@ impl VrcApiClient {
                 two_factor_type: Some(two_factor_type.to_string()),
                 auth_cookie: Some(auth_cookie.to_string()),
                 user: None,
-                error: Some(format!("Invalid 2FA code: HTTP {}", res.status())),
+                error: Some(format!("Invalid 2FA code: {}", api_error_message(res).await)),
             });
         }
 
@@ -521,4 +551,17 @@ fn md5_hash(bytes: &[u8]) -> u128 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_credential;
+
+    #[test]
+    fn test_encode_credential_matches_encode_uri_component() {
+        assert_eq!(encode_credential("plainUser_1.-"), "plainUser_1.-");
+        assert_eq!(encode_credential("p@ss:w0rd+&%"), "p%40ss%3Aw0rd%2B%26%25");
+        assert_eq!(encode_credential("a b!~*'()"), "a%20b!~*'()");
+        assert_eq!(encode_credential("é"), "%C3%A9");
+    }
 }
