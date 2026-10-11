@@ -6,7 +6,18 @@ Search tens of thousands of avatars locally with VRChat-style filters, preview g
 
 ## 🖼️ Preview
 
+![Search results](images/preview-search.png)
+
+| Search dashboard & filters | Avatar details & image gallery |
+|---|---|
+| ![Search dashboard with platform, performance, style and content filters](images/preview-filters.png) | ![Avatar details modal with image carousel and performance ratings](images/preview-details.png) |
+
+<details>
+<summary>Legacy Rust GUI (v1)</summary>
+
 ![Prismic's Avatar Search Preview](images/avatar%20search%20preview.png)
+
+</details>
 
 ## 📥 Download
 
