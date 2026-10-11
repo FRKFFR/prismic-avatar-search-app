@@ -1,0 +1,7 @@
+{
+  "mainBinaryName": "prismic-avatar-search",
+  "bundle": {
+    "category": "Utility",
+    "shortDescription": "Search, browse, and equip VRChat avatars"
+  }
+}

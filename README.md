@@ -12,10 +12,15 @@ Search tens of thousands of avatars locally with VRChat-style filters, preview g
 
 Grab the latest installer from [**GitHub Releases**](https://github.com/FRKFFR/prismic-avatar-search-app/releases/latest):
 
-| Installer | File |
-|---|---|
-| NSIS Setup (recommended) | `prismic-avatar-search_*_x64-setup.exe` |
-| MSI | `prismic-avatar-search_*_x64_en-US.msi` |
+| Platform | Installer | File |
+|---|---|---|
+| Windows | NSIS Setup (recommended) | `prismic-avatar-search_*_x64-setup.exe` |
+| Windows | MSI | `prismic-avatar-search_*_x64_en-US.msi` |
+| Linux | AppImage (any distro) | `prismic-avatar-search_*_amd64.AppImage` |
+| Linux | Debian / Ubuntu | `prismic-avatar-search_*_amd64.deb` |
+| Linux | Fedora / openSUSE | `prismic-avatar-search-*.x86_64.rpm` |
+
+On Linux, make the AppImage executable (`chmod +x prismic-avatar-search_*.AppImage`) and run it, or install the package with `sudo apt install ./prismic-avatar-search_*_amd64.deb` / `sudo dnf install ./prismic-avatar-search-*.x86_64.rpm`.
 
 On first launch, the app downloads the avatar database (~400 MB) and syncs it into a local SQLite index.
 
@@ -64,6 +69,7 @@ On first launch, the app downloads the avatar database (~400 MB) and syncs it in
 - [Node.js](https://nodejs.org/) 18+ and npm
 - [Rust toolchain](https://rustup.rs/) 1.77+
 - Windows: Visual Studio Build Tools (C++ workload) + WebView2
+- Linux (Debian/Ubuntu): `sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` — see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/#linux) for other distros
 
 ### Run
 
@@ -77,7 +83,7 @@ npm run dev
 # Standalone desktop app (frontend embedded)
 npm run build
 cd src-tauri
-cargo run --release        # → target/release/app.exe
+cargo run --release        # → target/release/app.exe (Windows) / target/release/app (Linux)
 ```
 
 > ⚠️ `custom-protocol` is enabled in `Cargo.toml`, so `cargo tauri dev` loads the embedded build instead of the Vite dev server. For frontend iteration use `npm run dev` in a browser, then `npm run build` before `cargo build`.
@@ -102,13 +108,13 @@ prismic_avatar_search/    # Legacy egui/native version (kept for reference)
 old/                      # Older experiments
 ```
 
-## 🔧 Data Locations (Windows)
+## 🔧 Data Locations
 
-| What | Where |
-|---|---|
-| Avatar DB + favorites | `%APPDATA%\com.prismic.avatarsearch\avatars.db` |
-| Image & details cache | `%APPDATA%\com.prismic.avatarsearch\cache\` |
-| Auth/session config | `%APPDATA%\com.prismic.avatarsearch\` |
+| What | Windows | Linux |
+|---|---|---|
+| Avatar DB + favorites | `%APPDATA%\com.prismic.avatarsearch\avatars.db` | `~/.local/share/com.prismic.avatarsearch/avatars.db` |
+| Image & details cache | `%APPDATA%\com.prismic.avatarsearch\cache\` | `~/.local/share/com.prismic.avatarsearch/cache/` |
+| Auth/session config | `%APPDATA%\com.prismic.avatarsearch\` | `~/.local/share/com.prismic.avatarsearch/` |
 
 ## 🐛 Troubleshooting
 
