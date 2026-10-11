@@ -1,6 +1,6 @@
 {
   "productName": "prismic-avatar-search",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "identifier": "com.prismic.avatarsearch",
   "build": {
     "frontendDist": "../dist",
