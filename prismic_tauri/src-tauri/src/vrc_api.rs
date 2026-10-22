@@ -30,17 +30,19 @@ fn validate_avatar_id(avatar_id: &str) -> Result<()> {
     }
 }
 
+fn is_allowed_vrc_host(host: &str) -> bool {
+    host == "vrchat.cloud"
+        || host.ends_with(".vrchat.cloud")
+        || host == "vrchat.com"
+        || host.ends_with(".vrchat.com")
+}
+
 fn validate_image_url(image_url: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(image_url).map_err(|_| anyhow!("Invalid image URL"))?;
     if parsed.scheme() != "https" {
         return Err(anyhow!("Image URL must use https"));
     }
-    let host = parsed.host_str().unwrap_or_default();
-    let allowed = host == "vrchat.cloud"
-        || host.ends_with(".vrchat.cloud")
-        || host == "vrchat.com"
-        || host.ends_with(".vrchat.com");
-    if !allowed {
+    if !is_allowed_vrc_host(parsed.host_str().unwrap_or_default()) {
         return Err(anyhow!("Image host is not an allowed VRChat domain"));
     }
     Ok(())
@@ -105,6 +107,17 @@ impl VrcApiClient {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .cookie_store(true)
+            // Requests carry the VRChat auth cookie: never follow redirects to
+            // non-VRChat hosts or the cookie would leak there.
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 10 {
+                    attempt.stop()
+                } else if is_allowed_vrc_host(attempt.url().host_str().unwrap_or_default()) {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
             .build()?;
 
         let semaphore = Arc::new(Semaphore::new(4));
@@ -325,7 +338,7 @@ impl VrcApiClient {
         let suffix = if show_old_images { "_all_v2.json" } else { "_v2.json" };
         let cached_file = self.cache_dir.join("details").join(format!("{}{}", avatar_id, suffix));
         if cached_file.exists() {
-            if let Ok(data) = fs::read_to_string(&cached_file) {
+            if let Ok(data) = tokio::fs::read_to_string(&cached_file).await {
                 if let Ok(details) = serde_json::from_str::<AvatarOnlineDetails>(&data) {
                     return Ok(details);
                 }
@@ -476,7 +489,7 @@ impl VrcApiClient {
         // lookup must be retried next time instead of cached forever.
         if gallery_checked && history_ok {
             if let Ok(json_str) = serde_json::to_string(&details) {
-                let _ = fs::write(&cached_file, json_str);
+                let _ = tokio::fs::write(&cached_file, json_str).await;
             }
         }
 
@@ -500,11 +513,11 @@ impl VrcApiClient {
         validate_image_url(image_url)?;
 
         // Sanitize cache filename
-        let hash = format!("{:x}", md5_hash(image_url.as_bytes()));
+        let hash = format!("{:x}", fnv1a_hash(image_url.as_bytes()));
         let cached_file = self.cache_dir.join("images").join(format!("{}.img", hash));
 
         if cached_file.exists() {
-            if let Ok(bytes) = fs::read(&cached_file) {
+            if let Ok(bytes) = tokio::fs::read(&cached_file).await {
                 return Ok(format!("data:{};base64,{}", Self::detect_mime(&bytes), BASE64.encode(bytes)));
             }
         }
@@ -528,7 +541,7 @@ impl VrcApiClient {
             .to_string();
 
         let bytes = body_bytes_capped(res, MAX_IMAGE_BYTES).await?;
-        let _ = fs::write(&cached_file, &bytes);
+        let _ = tokio::fs::write(&cached_file, &bytes).await;
 
         Ok(format!("data:{};base64,{}", mime, BASE64.encode(bytes)))
     }
@@ -543,7 +556,7 @@ impl VrcApiClient {
         }
 
         if cached_file.exists() {
-            if let Ok(bytes) = fs::read(&cached_file) {
+            if let Ok(bytes) = tokio::fs::read(&cached_file).await {
                 return Ok(Some(format!("data:{};base64,{}", Self::detect_mime(&bytes), BASE64.encode(bytes))));
             }
         }
@@ -560,7 +573,7 @@ impl VrcApiClient {
 
         if !res.status().is_success() {
             if res.status().as_u16() == 404 {
-                let _ = fs::write(&none_marker, b"");
+                let _ = tokio::fs::write(&none_marker, b"").await;
             }
             return Ok(None);
         }
@@ -574,7 +587,7 @@ impl VrcApiClient {
         let target_url = match img_url {
             Some(u) => u,
             None => {
-                let _ = fs::write(&none_marker, b"");
+                let _ = tokio::fs::write(&none_marker, b"").await;
                 return Ok(None);
             }
         };
@@ -602,7 +615,7 @@ impl VrcApiClient {
             .to_string();
 
         let bytes = body_bytes_capped(img_res, MAX_IMAGE_BYTES).await?;
-        let _ = fs::write(&cached_file, &bytes);
+        let _ = tokio::fs::write(&cached_file, &bytes).await;
 
         Ok(Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes))))
     }
@@ -618,8 +631,8 @@ impl VrcApiClient {
     }
 }
 
-// Simple deterministic hash for file caching
-fn md5_hash(bytes: &[u8]) -> u128 {
+// Simple deterministic FNV-1a hash for file caching
+fn fnv1a_hash(bytes: &[u8]) -> u128 {
     let mut hash: u128 = 0xcbf29ce484222325;
     for &b in bytes {
         hash ^= b as u128;
