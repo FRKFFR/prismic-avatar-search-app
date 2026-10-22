@@ -27,11 +27,14 @@ pub async fn get_db_status(state: State<'_, AppState>) -> Result<DatabaseStatus,
 
 #[tauri::command]
 pub async fn sync_database(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    if state.is_syncing.load(Ordering::SeqCst) {
+    if state
+        .is_syncing
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err("Database synchronization is already in progress.".into());
     }
 
-    state.is_syncing.store(true, Ordering::SeqCst);
     let db_path = state.db_path.clone();
     let is_syncing = state.is_syncing.clone();
 
@@ -136,12 +139,13 @@ pub async fn get_auth_state(state: State<'_, AppState>) -> Result<Option<UserPro
     }
 
     match state.vrc.get_current_user(&cfg.auth_cookie).await {
-        Ok(profile) => Ok(Some(profile)),
-        Err(_) => {
-            // Cookie expired, clear stored auth
+        Ok(Some(profile)) => Ok(Some(profile)),
+        Ok(None) => {
+            // Cookie expired/rejected, clear stored auth
             let _ = state.config.clear_auth();
             Ok(None)
         }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -232,7 +236,11 @@ pub async fn get_avatar_thumbnail(
 
 #[tauri::command]
 pub async fn open_in_browser(url: String) -> Result<(), String> {
-    open::that(url).map_err(|e| e.to_string())
+    let parsed = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err("Only http(s) URLs may be opened".into());
+    }
+    open::that(parsed.as_str()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

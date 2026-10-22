@@ -15,6 +15,49 @@ use crate::models::{AvatarOnlineDetails, LoginResponse, UserProfile};
 
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 const APP_USER_AGENT: &str = "VRChatAvatarGUI/0.1";
+const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
+fn validate_avatar_id(avatar_id: &str) -> Result<()> {
+    let ok = !avatar_id.is_empty()
+        && avatar_id.len() <= 128
+        && avatar_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(anyhow!("Invalid avatar ID"))
+    }
+}
+
+fn validate_image_url(image_url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(image_url).map_err(|_| anyhow!("Invalid image URL"))?;
+    if parsed.scheme() != "https" {
+        return Err(anyhow!("Image URL must use https"));
+    }
+    let host = parsed.host_str().unwrap_or_default();
+    let allowed = host == "vrchat.cloud"
+        || host.ends_with(".vrchat.cloud")
+        || host == "vrchat.com"
+        || host.ends_with(".vrchat.com");
+    if !allowed {
+        return Err(anyhow!("Image host is not an allowed VRChat domain"));
+    }
+    Ok(())
+}
+
+async fn body_bytes_capped(res: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    let mut stream = res.bytes_stream();
+    let mut buf = Vec::new();
+    while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
+        let chunk = chunk?;
+        if buf.len() + chunk.len() > max {
+            return Err(anyhow!("Response body exceeds the {} byte limit", max));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
 
 // Same set as JavaScript's encodeURIComponent; VRChat requires credentials encoded this way before Basic auth.
 const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
@@ -72,7 +115,11 @@ impl VrcApiClient {
     fn auth_headers(auth_cookie: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static(APP_USER_AGENT));
-        if !auth_cookie.is_empty() {
+        if !auth_cookie.is_empty()
+            && auth_cookie
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        {
             if let Ok(val) = HeaderValue::from_str(&format!("auth={}", auth_cookie)) {
                 headers.insert(COOKIE, val);
             }
@@ -161,6 +208,11 @@ impl VrcApiClient {
             });
         }
 
+        // The verify response may set a rotated auth cookie; prefer it over the old one.
+        let new_cookie = res
+            .cookies()
+            .find(|c| c.name() == "auth")
+            .map(|c| c.value().to_string());
         let body: Value = res.json().await?;
         let verified = body.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -175,20 +227,26 @@ impl VrcApiClient {
             });
         }
 
+        let session_cookie = new_cookie.unwrap_or_else(|| auth_cookie.to_string());
+
         // Retrieve full user profile
-        let user_profile = self.get_current_user(auth_cookie).await?;
+        let user_profile = self
+            .get_current_user(&session_cookie)
+            .await?
+            .ok_or_else(|| anyhow!("Verified session cookie was rejected"))?;
 
         Ok(LoginResponse {
             success: true,
             requires_2fa: false,
             two_factor_type: None,
-            auth_cookie: Some(auth_cookie.to_string()),
+            auth_cookie: Some(session_cookie),
             user: Some(user_profile),
             error: None,
         })
     }
 
-    pub async fn get_current_user(&self, auth_cookie: &str) -> Result<UserProfile> {
+    /// Returns `Ok(None)` when the cookie is rejected (HTTP 401/403).
+    pub async fn get_current_user(&self, auth_cookie: &str) -> Result<Option<UserProfile>> {
         let res = self
             .client
             .get(format!("{}/auth/user", API_BASE))
@@ -196,12 +254,18 @@ impl VrcApiClient {
             .send()
             .await?;
 
+        if res.status() == reqwest::StatusCode::UNAUTHORIZED
+            || res.status() == reqwest::StatusCode::FORBIDDEN
+        {
+            return Ok(None);
+        }
+
         if !res.status().is_success() {
             return Err(anyhow!("Failed to get user profile: HTTP {}", res.status()));
         }
 
         let body: Value = res.json().await?;
-        Ok(self.parse_user_profile(&body))
+        Ok(Some(self.parse_user_profile(&body)))
     }
 
     fn parse_user_profile(&self, json_body: &Value) -> UserProfile {
@@ -239,7 +303,9 @@ impl VrcApiClient {
         fallback
     }
 
-    pub async fn select_avatar(&self, auth_cookie: &str, avatar_id: &str) -> Result<()> {        let url = format!("{}/avatars/{}/select", API_BASE, avatar_id);
+    pub async fn select_avatar(&self, auth_cookie: &str, avatar_id: &str) -> Result<()> {
+        validate_avatar_id(avatar_id)?;
+        let url = format!("{}/avatars/{}/select", API_BASE, avatar_id);
         let res = self
             .client
             .put(&url)
@@ -255,6 +321,7 @@ impl VrcApiClient {
     }
 
     pub async fn get_avatar_details(&self, auth_cookie: &str, avatar_id: &str, show_old_images: bool) -> Result<AvatarOnlineDetails> {
+        validate_avatar_id(avatar_id)?;
         let suffix = if show_old_images { "_all_v2.json" } else { "_v2.json" };
         let cached_file = self.cache_dir.join("details").join(format!("{}{}", avatar_id, suffix));
         if cached_file.exists() {
@@ -429,6 +496,9 @@ impl VrcApiClient {
     }
 
     pub async fn fetch_image_base64(&self, auth_cookie: &str, image_url: &str) -> Result<String> {
+        // Only proxy VRChat hosts: the request carries the user's auth cookie.
+        validate_image_url(image_url)?;
+
         // Sanitize cache filename
         let hash = format!("{:x}", md5_hash(image_url.as_bytes()));
         let cached_file = self.cache_dir.join("images").join(format!("{}.img", hash));
@@ -457,13 +527,14 @@ impl VrcApiClient {
             .unwrap_or("image/jpeg")
             .to_string();
 
-        let bytes = res.bytes().await?.to_vec();
+        let bytes = body_bytes_capped(res, MAX_IMAGE_BYTES).await?;
         let _ = fs::write(&cached_file, &bytes);
 
         Ok(format!("data:{};base64,{}", mime, BASE64.encode(bytes)))
     }
 
     pub async fn get_avatar_thumbnail(&self, auth_cookie: &str, avatar_id: &str) -> Result<Option<String>> {
+        validate_avatar_id(avatar_id)?;
         let cached_file = self.cache_dir.join("images").join(format!("{}.img", avatar_id));
         let none_marker = self.cache_dir.join("images").join(format!("{}.none", avatar_id));
 
@@ -508,6 +579,10 @@ impl VrcApiClient {
             }
         };
 
+        if validate_image_url(target_url).is_err() {
+            return Ok(None);
+        }
+
         let img_res = self
             .client
             .get(target_url)
@@ -526,7 +601,7 @@ impl VrcApiClient {
             .unwrap_or("image/jpeg")
             .to_string();
 
-        let bytes = img_res.bytes().await?.to_vec();
+        let bytes = body_bytes_capped(img_res, MAX_IMAGE_BYTES).await?;
         let _ = fs::write(&cached_file, &bytes);
 
         Ok(Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes))))
