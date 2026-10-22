@@ -49,12 +49,16 @@ pub async fn sync_database(app: AppHandle, state: State<'_, AppState>) -> Result
     let db_path = state.db_path.clone();
     let is_syncing = state.is_syncing.clone();
 
-    tauri::async_runtime::spawn(async move {
+    // The pipeline's parsing and SQLite writes are blocking: run it on a
+    // dedicated blocking thread instead of an async runtime worker.
+    tauri::async_runtime::spawn_blocking(move || {
         let app_clone = app.clone();
-        let res = run_sync_pipeline(&db_path, move |progress: SyncProgress| {
-            let _ = app_clone.emit("db-sync-progress", progress);
-        })
-        .await;
+        let res = tauri::async_runtime::block_on(run_sync_pipeline(
+            &db_path,
+            move |progress: SyncProgress| {
+                let _ = app_clone.emit("db-sync-progress", progress);
+            },
+        ));
 
         is_syncing.store(false, Ordering::SeqCst);
 

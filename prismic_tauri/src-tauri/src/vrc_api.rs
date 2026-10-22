@@ -20,6 +20,7 @@ const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/FRKFFR/prismic-avatar-search-app/releases/latest";
 
 /// Parse "v2.0.1" / "2.0.1" style versions, ignoring pre-release/build suffixes.
+/// Any fourth or later component is ignored (releases are always major.minor.patch).
 fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let core = v
         .trim()
@@ -128,7 +129,9 @@ impl VrcApiClient {
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= 10 {
                     attempt.stop()
-                } else if is_allowed_vrc_host(attempt.url().host_str().unwrap_or_default()) {
+                } else if attempt.url().scheme() == "https"
+                    && is_allowed_vrc_host(attempt.url().host_str().unwrap_or_default())
+                {
                     attempt.follow()
                 } else {
                     attempt.stop()
@@ -240,7 +243,7 @@ impl VrcApiClient {
         // The verify response may set a rotated auth cookie; prefer it over the old one.
         let new_cookie = res
             .cookies()
-            .find(|c| c.name() == "auth")
+            .find(|c| c.name() == "auth" && !c.value().is_empty())
             .map(|c| c.value().to_string());
         let body: Value = res.json().await?;
         let verified = body.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -274,7 +277,8 @@ impl VrcApiClient {
         })
     }
 
-    /// Returns `Ok(None)` when the cookie is rejected (HTTP 401/403).
+    /// Returns `Ok(None)` only when the cookie is rejected (HTTP 401).
+    /// 403 is typically Cloudflare/WAF rate-limiting — a transient error, not rejection.
     pub async fn get_current_user(&self, auth_cookie: &str) -> Result<Option<UserProfile>> {
         let res = self
             .client
@@ -283,9 +287,7 @@ impl VrcApiClient {
             .send()
             .await?;
 
-        if res.status() == reqwest::StatusCode::UNAUTHORIZED
-            || res.status() == reqwest::StatusCode::FORBIDDEN
-        {
+        if res.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Ok(None);
         }
 
@@ -638,12 +640,15 @@ impl VrcApiClient {
 
     /// Compare the running version against the latest GitHub release.
     /// Callers surface errors subtly; `update_available` is the signal.
+    /// Uses a dedicated client: `self.client`'s redirect policy only follows
+    /// VRChat hosts, but GitHub legitimately redirects (e.g. repo renames).
     pub async fn check_latest_release(&self, current_version: &str) -> Result<UpdateInfo> {
-        let res = self
-            .client
-            .get(LATEST_RELEASE_URL)
-            .header(USER_AGENT, APP_USER_AGENT)
+        let client = Client::builder()
+            .user_agent(APP_USER_AGENT)
             .timeout(Duration::from_secs(10))
+            .build()?;
+        let res = client
+            .get(LATEST_RELEASE_URL)
             .send()
             .await
             .map_err(|e| anyhow!("Update check failed: {}", e))?;
