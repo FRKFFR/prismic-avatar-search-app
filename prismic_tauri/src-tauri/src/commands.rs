@@ -8,7 +8,7 @@ use crate::db::DbManager;
 use crate::downloader::run_sync_pipeline;
 use crate::models::{
     AppSettings, AvatarEntry, AvatarOnlineDetails, DatabaseStatus, LoginResponse, SearchFilter, SearchResult,
-    SyncProgress, UserProfile,
+    SyncProgress, UpdateInfo, UserProfile,
 };
 use crate::vrc_api::VrcApiClient;
 
@@ -273,6 +273,23 @@ pub async fn get_avatar_thumbnail(
     state
         .vrc
         .get_avatar_thumbnail(&cfg.auth_cookie, &avatar_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn check_for_updates(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<UpdateInfo, String> {
+    let current = app
+        .config()
+        .version
+        .clone()
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    state
+        .vrc
+        .check_latest_release(&current)
         .await
         .map_err(|e| e.to_string())
 }

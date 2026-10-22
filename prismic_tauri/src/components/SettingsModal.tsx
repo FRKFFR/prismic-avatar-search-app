@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Settings, Image as ImageIcon, Trash2, Check, RefreshCw } from 'lucide-react';
+import { X, Settings, Image as ImageIcon, Trash2, Check, RefreshCw, Download } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from './Toast';
-import type { AppSettings } from '../types';
+import type { AppSettings, UpdateInfo } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -19,6 +19,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [settings, setSettings] = useState<AppSettings>({ show_old_images: false });
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'latest' | 'error'>('idle');
 
   useEffect(() => {
     if (isOpen) {
@@ -57,6 +60,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       showToast(`Failed to clear cache: ${err?.message || err}`, 'error');
     } finally {
       setIsClearingCache(false);
+    }
+  };
+
+  const handleCheckUpdate = async () => {
+    setIsCheckingUpdate(true);
+    try {
+      const info = await api.checkForUpdates();
+      setUpdateInfo(info.update_available ? info : null);
+      setUpdateStatus(info.update_available ? 'idle' : 'latest');
+    } catch (_) {
+      setUpdateInfo(null);
+      setUpdateStatus('error');
+    } finally {
+      setIsCheckingUpdate(false);
     }
   };
 
@@ -136,6 +153,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
               <span>Clear</span>
             </button>
+          </div>
+          {/* App Updates Card */}
+          <div className="p-4 rounded-2xl bg-gray-900/40 border border-gray-800 flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Download className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-xs font-bold text-gray-200">App Updates</h3>
+              </div>
+              <p className="text-[11px] text-gray-400 leading-relaxed pr-2">
+                {updateInfo
+                  ? `Version ${updateInfo.latest_version} is available (you have ${updateInfo.current_version}).`
+                  : updateStatus === 'latest'
+                  ? 'You are running the latest version.'
+                  : updateStatus === 'error'
+                  ? 'Could not check for updates right now.'
+                  : 'Check GitHub for a newer release.'}
+              </p>
+            </div>
+            {updateInfo ? (
+              <button
+                onClick={() => api.openInBrowser(updateInfo.release_url)}
+                className="px-3.5 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleCheckUpdate}
+                disabled={isCheckingUpdate}
+                className="px-3.5 py-1.5 rounded-xl bg-gray-800 hover:bg-gray-700 border border-gray-700 text-xs font-semibold text-gray-200 transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                <span>Check</span>
+              </button>
+            )}
           </div>
         </div>
 

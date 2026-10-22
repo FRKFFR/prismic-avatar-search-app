@@ -112,3 +112,10 @@ export interface AvatarOnlineDetails {
 export interface AppSettings {
   show_old_images: boolean;
 }
+
+export interface UpdateInfo {
+  current_version: string;
+  latest_version: string;
+  release_url: string;
+  update_available: boolean;
+}

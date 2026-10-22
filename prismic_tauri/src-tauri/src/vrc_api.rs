@@ -11,11 +11,27 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 
-use crate::models::{AvatarOnlineDetails, LoginResponse, UserProfile};
+use crate::models::{AvatarOnlineDetails, LoginResponse, UpdateInfo, UserProfile};
 
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 const APP_USER_AGENT: &str = "VRChatAvatarGUI/0.1";
 const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+const LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/FRKFFR/prismic-avatar-search-app/releases/latest";
+
+/// Parse "v2.0.1" / "2.0.1" style versions, ignoring pre-release/build suffixes.
+fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v
+        .trim()
+        .trim_start_matches(['v', 'V'])
+        .split(['-', '+'])
+        .next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
 
 fn validate_avatar_id(avatar_id: &str) -> Result<()> {
     let ok = !avatar_id.is_empty()
@@ -618,6 +634,41 @@ impl VrcApiClient {
         let _ = tokio::fs::write(&cached_file, &bytes).await;
 
         Ok(Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes))))
+    }
+
+    /// Compare the running version against the latest GitHub release.
+    /// Callers surface errors subtly; `update_available` is the signal.
+    pub async fn check_latest_release(&self, current_version: &str) -> Result<UpdateInfo> {
+        let res = self
+            .client
+            .get(LATEST_RELEASE_URL)
+            .header(USER_AGENT, APP_USER_AGENT)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| anyhow!("Update check failed: {}", e))?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!("Update check failed: HTTP {}", res.status()));
+        }
+
+        let body: Value = res.json().await?;
+        let tag = body.get("tag_name").and_then(|v| v.as_str()).unwrap_or_default();
+        let url = body.get("html_url").and_then(|v| v.as_str()).unwrap_or_default();
+        if tag.is_empty() || url.is_empty() {
+            return Err(anyhow!("Update check failed: malformed release payload"));
+        }
+
+        let latest = parse_version(tag).ok_or_else(|| anyhow!("Unparseable release tag: {}", tag))?;
+        let current = parse_version(current_version)
+            .ok_or_else(|| anyhow!("Unparseable app version: {}", current_version))?;
+
+        Ok(UpdateInfo {
+            current_version: current_version.to_string(),
+            latest_version: tag.trim().trim_start_matches(['v', 'V']).to_string(),
+            release_url: url.to_string(),
+            update_available: latest > current,
+        })
     }
 
     pub fn clear_cache(&self) -> Result<()> {

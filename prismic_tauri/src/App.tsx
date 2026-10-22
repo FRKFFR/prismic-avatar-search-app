@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Download, X } from 'lucide-react';
 import { api } from './api';
 import type {
   AvatarEntry,
@@ -6,6 +7,7 @@ import type {
   SearchFilter,
   SearchResult,
   SyncProgress,
+  UpdateInfo,
   UserProfile,
 } from './types';
 import { Header } from './components/Header';
@@ -72,6 +74,7 @@ function MainApp() {
   const [isDashboardOpen, setIsDashboardOpen] = useState(true);
   const [showOldImages, setShowOldImages] = useState(false);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   // Search execution
   const searchSeq = useRef(0);
@@ -129,6 +132,14 @@ function MainApp() {
       // 3. Load app settings & favorites
       api.getAppSettings().then((s) => setShowOldImages(s.show_old_images)).catch(() => {});
       api.getFavoriteIds().then((ids) => setFavoriteIds(new Set(ids))).catch(() => {});
+
+      // 4. Check for a newer release (silent on failure)
+      api
+        .checkForUpdates()
+        .then((info) => {
+          if (info.update_available) setUpdateInfo(info);
+        })
+        .catch(() => {});
 
       // 3. Check DB Status
       try {
@@ -301,6 +312,30 @@ function MainApp() {
         isFavoritesOnly={filter.favorites_only}
         onToggleFavorites={() => handleFilterChange({ favorites_only: !filter.favorites_only, page: 0 })}
       />
+
+      {/* Update Available Banner */}
+      {updateInfo && (
+        <div className="bg-cyan-950/60 border-b border-cyan-800/50 px-4 py-2 flex items-center justify-center gap-3 text-xs text-cyan-200">
+          <Download className="w-3.5 h-3.5 text-cyan-400" />
+          <span>
+            Update available: <span className="font-bold">v{updateInfo.latest_version}</span>
+            <span className="text-gray-400"> (you have v{updateInfo.current_version})</span>
+          </span>
+          <button
+            onClick={() => api.openInBrowser(updateInfo.release_url)}
+            className="px-3 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition-colors"
+          >
+            Download
+          </button>
+          <button
+            onClick={() => setUpdateInfo(null)}
+            className="p-1 rounded-md hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors"
+            title="Dismiss"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* VRChat 3-Column Search Dashboard */}
       <VrcSearchDashboard
