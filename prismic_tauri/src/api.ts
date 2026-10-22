@@ -9,6 +9,7 @@ import type {
   SearchFilter,
   SearchResult,
   SyncProgress,
+  UpdateInfo,
   UserProfile,
 } from './types';
 
@@ -193,6 +194,18 @@ export const api = {
   async updateAppSettings(settings: AppSettings): Promise<void> {
     if (!isTauri()) return;
     return invoke<void>('update_app_settings', { settings });
+  },
+
+  async checkForUpdates(): Promise<UpdateInfo> {
+    if (!isTauri()) {
+      return {
+        current_version: '0.0.0',
+        latest_version: '0.0.0',
+        release_url: '',
+        update_available: false,
+      };
+    }
+    return invoke<UpdateInfo>('check_for_updates');
   },
 
   async clearImageCache(): Promise<void> {

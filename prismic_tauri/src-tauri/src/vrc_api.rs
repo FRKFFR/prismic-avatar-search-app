@@ -11,10 +11,72 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 
-use crate::models::{AvatarOnlineDetails, LoginResponse, UserProfile};
+use crate::models::{AvatarOnlineDetails, LoginResponse, UpdateInfo, UserProfile};
 
 const API_BASE: &str = "https://api.vrchat.cloud/api/1";
 const APP_USER_AGENT: &str = "VRChatAvatarGUI/0.1";
+const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+const LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/FRKFFR/prismic-avatar-search-app/releases/latest";
+
+/// Parse "v2.0.1" / "2.0.1" style versions, ignoring pre-release/build suffixes.
+/// Any fourth or later component is ignored (releases are always major.minor.patch).
+fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v
+        .trim()
+        .trim_start_matches(['v', 'V'])
+        .split(['-', '+'])
+        .next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn validate_avatar_id(avatar_id: &str) -> Result<()> {
+    let ok = !avatar_id.is_empty()
+        && avatar_id.len() <= 128
+        && avatar_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(anyhow!("Invalid avatar ID"))
+    }
+}
+
+fn is_allowed_vrc_host(host: &str) -> bool {
+    host == "vrchat.cloud"
+        || host.ends_with(".vrchat.cloud")
+        || host == "vrchat.com"
+        || host.ends_with(".vrchat.com")
+}
+
+fn validate_image_url(image_url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(image_url).map_err(|_| anyhow!("Invalid image URL"))?;
+    if parsed.scheme() != "https" {
+        return Err(anyhow!("Image URL must use https"));
+    }
+    if !is_allowed_vrc_host(parsed.host_str().unwrap_or_default()) {
+        return Err(anyhow!("Image host is not an allowed VRChat domain"));
+    }
+    Ok(())
+}
+
+async fn body_bytes_capped(res: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    let mut stream = res.bytes_stream();
+    let mut buf = Vec::new();
+    while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
+        let chunk = chunk?;
+        if buf.len() + chunk.len() > max {
+            return Err(anyhow!("Response body exceeds the {} byte limit", max));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
 
 // Same set as JavaScript's encodeURIComponent; VRChat requires credentials encoded this way before Basic auth.
 const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
@@ -62,6 +124,19 @@ impl VrcApiClient {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .cookie_store(true)
+            // Requests carry the VRChat auth cookie: never follow redirects to
+            // non-VRChat hosts or the cookie would leak there.
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 10 {
+                    attempt.stop()
+                } else if attempt.url().scheme() == "https"
+                    && is_allowed_vrc_host(attempt.url().host_str().unwrap_or_default())
+                {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
             .build()?;
 
         let semaphore = Arc::new(Semaphore::new(4));
@@ -72,7 +147,11 @@ impl VrcApiClient {
     fn auth_headers(auth_cookie: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static(APP_USER_AGENT));
-        if !auth_cookie.is_empty() {
+        if !auth_cookie.is_empty()
+            && auth_cookie
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        {
             if let Ok(val) = HeaderValue::from_str(&format!("auth={}", auth_cookie)) {
                 headers.insert(COOKIE, val);
             }
@@ -161,6 +240,11 @@ impl VrcApiClient {
             });
         }
 
+        // The verify response may set a rotated auth cookie; prefer it over the old one.
+        let new_cookie = res
+            .cookies()
+            .find(|c| c.name() == "auth" && !c.value().is_empty())
+            .map(|c| c.value().to_string());
         let body: Value = res.json().await?;
         let verified = body.get("verified").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -175,20 +259,27 @@ impl VrcApiClient {
             });
         }
 
+        let session_cookie = new_cookie.unwrap_or_else(|| auth_cookie.to_string());
+
         // Retrieve full user profile
-        let user_profile = self.get_current_user(auth_cookie).await?;
+        let user_profile = self
+            .get_current_user(&session_cookie)
+            .await?
+            .ok_or_else(|| anyhow!("Verified session cookie was rejected"))?;
 
         Ok(LoginResponse {
             success: true,
             requires_2fa: false,
             two_factor_type: None,
-            auth_cookie: Some(auth_cookie.to_string()),
+            auth_cookie: Some(session_cookie),
             user: Some(user_profile),
             error: None,
         })
     }
 
-    pub async fn get_current_user(&self, auth_cookie: &str) -> Result<UserProfile> {
+    /// Returns `Ok(None)` only when the cookie is rejected (HTTP 401).
+    /// 403 is typically Cloudflare/WAF rate-limiting — a transient error, not rejection.
+    pub async fn get_current_user(&self, auth_cookie: &str) -> Result<Option<UserProfile>> {
         let res = self
             .client
             .get(format!("{}/auth/user", API_BASE))
@@ -196,12 +287,16 @@ impl VrcApiClient {
             .send()
             .await?;
 
+        if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(None);
+        }
+
         if !res.status().is_success() {
             return Err(anyhow!("Failed to get user profile: HTTP {}", res.status()));
         }
 
         let body: Value = res.json().await?;
-        Ok(self.parse_user_profile(&body))
+        Ok(Some(self.parse_user_profile(&body)))
     }
 
     fn parse_user_profile(&self, json_body: &Value) -> UserProfile {
@@ -239,7 +334,9 @@ impl VrcApiClient {
         fallback
     }
 
-    pub async fn select_avatar(&self, auth_cookie: &str, avatar_id: &str) -> Result<()> {        let url = format!("{}/avatars/{}/select", API_BASE, avatar_id);
+    pub async fn select_avatar(&self, auth_cookie: &str, avatar_id: &str) -> Result<()> {
+        validate_avatar_id(avatar_id)?;
+        let url = format!("{}/avatars/{}/select", API_BASE, avatar_id);
         let res = self
             .client
             .put(&url)
@@ -255,10 +352,11 @@ impl VrcApiClient {
     }
 
     pub async fn get_avatar_details(&self, auth_cookie: &str, avatar_id: &str, show_old_images: bool) -> Result<AvatarOnlineDetails> {
+        validate_avatar_id(avatar_id)?;
         let suffix = if show_old_images { "_all_v2.json" } else { "_v2.json" };
         let cached_file = self.cache_dir.join("details").join(format!("{}{}", avatar_id, suffix));
         if cached_file.exists() {
-            if let Ok(data) = fs::read_to_string(&cached_file) {
+            if let Ok(data) = tokio::fs::read_to_string(&cached_file).await {
                 if let Ok(details) = serde_json::from_str::<AvatarOnlineDetails>(&data) {
                     return Ok(details);
                 }
@@ -409,7 +507,7 @@ impl VrcApiClient {
         // lookup must be retried next time instead of cached forever.
         if gallery_checked && history_ok {
             if let Ok(json_str) = serde_json::to_string(&details) {
-                let _ = fs::write(&cached_file, json_str);
+                let _ = tokio::fs::write(&cached_file, json_str).await;
             }
         }
 
@@ -429,12 +527,15 @@ impl VrcApiClient {
     }
 
     pub async fn fetch_image_base64(&self, auth_cookie: &str, image_url: &str) -> Result<String> {
+        // Only proxy VRChat hosts: the request carries the user's auth cookie.
+        validate_image_url(image_url)?;
+
         // Sanitize cache filename
-        let hash = format!("{:x}", md5_hash(image_url.as_bytes()));
+        let hash = format!("{:x}", fnv1a_hash(image_url.as_bytes()));
         let cached_file = self.cache_dir.join("images").join(format!("{}.img", hash));
 
         if cached_file.exists() {
-            if let Ok(bytes) = fs::read(&cached_file) {
+            if let Ok(bytes) = tokio::fs::read(&cached_file).await {
                 return Ok(format!("data:{};base64,{}", Self::detect_mime(&bytes), BASE64.encode(bytes)));
             }
         }
@@ -457,13 +558,14 @@ impl VrcApiClient {
             .unwrap_or("image/jpeg")
             .to_string();
 
-        let bytes = res.bytes().await?.to_vec();
-        let _ = fs::write(&cached_file, &bytes);
+        let bytes = body_bytes_capped(res, MAX_IMAGE_BYTES).await?;
+        let _ = tokio::fs::write(&cached_file, &bytes).await;
 
         Ok(format!("data:{};base64,{}", mime, BASE64.encode(bytes)))
     }
 
     pub async fn get_avatar_thumbnail(&self, auth_cookie: &str, avatar_id: &str) -> Result<Option<String>> {
+        validate_avatar_id(avatar_id)?;
         let cached_file = self.cache_dir.join("images").join(format!("{}.img", avatar_id));
         let none_marker = self.cache_dir.join("images").join(format!("{}.none", avatar_id));
 
@@ -472,7 +574,7 @@ impl VrcApiClient {
         }
 
         if cached_file.exists() {
-            if let Ok(bytes) = fs::read(&cached_file) {
+            if let Ok(bytes) = tokio::fs::read(&cached_file).await {
                 return Ok(Some(format!("data:{};base64,{}", Self::detect_mime(&bytes), BASE64.encode(bytes))));
             }
         }
@@ -489,7 +591,7 @@ impl VrcApiClient {
 
         if !res.status().is_success() {
             if res.status().as_u16() == 404 {
-                let _ = fs::write(&none_marker, b"");
+                let _ = tokio::fs::write(&none_marker, b"").await;
             }
             return Ok(None);
         }
@@ -503,10 +605,14 @@ impl VrcApiClient {
         let target_url = match img_url {
             Some(u) => u,
             None => {
-                let _ = fs::write(&none_marker, b"");
+                let _ = tokio::fs::write(&none_marker, b"").await;
                 return Ok(None);
             }
         };
+
+        if validate_image_url(target_url).is_err() {
+            return Ok(None);
+        }
 
         let img_res = self
             .client
@@ -526,10 +632,48 @@ impl VrcApiClient {
             .unwrap_or("image/jpeg")
             .to_string();
 
-        let bytes = img_res.bytes().await?.to_vec();
-        let _ = fs::write(&cached_file, &bytes);
+        let bytes = body_bytes_capped(img_res, MAX_IMAGE_BYTES).await?;
+        let _ = tokio::fs::write(&cached_file, &bytes).await;
 
         Ok(Some(format!("data:{};base64,{}", mime, BASE64.encode(bytes))))
+    }
+
+    /// Compare the running version against the latest GitHub release.
+    /// Callers surface errors subtly; `update_available` is the signal.
+    /// Uses a dedicated client: `self.client`'s redirect policy only follows
+    /// VRChat hosts, but GitHub legitimately redirects (e.g. repo renames).
+    pub async fn check_latest_release(&self, current_version: &str) -> Result<UpdateInfo> {
+        let client = Client::builder()
+            .user_agent(APP_USER_AGENT)
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        let res = client
+            .get(LATEST_RELEASE_URL)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Update check failed: {}", e))?;
+
+        if !res.status().is_success() {
+            return Err(anyhow!("Update check failed: HTTP {}", res.status()));
+        }
+
+        let body: Value = res.json().await?;
+        let tag = body.get("tag_name").and_then(|v| v.as_str()).unwrap_or_default();
+        let url = body.get("html_url").and_then(|v| v.as_str()).unwrap_or_default();
+        if tag.is_empty() || url.is_empty() {
+            return Err(anyhow!("Update check failed: malformed release payload"));
+        }
+
+        let latest = parse_version(tag).ok_or_else(|| anyhow!("Unparseable release tag: {}", tag))?;
+        let current = parse_version(current_version)
+            .ok_or_else(|| anyhow!("Unparseable app version: {}", current_version))?;
+
+        Ok(UpdateInfo {
+            current_version: current_version.to_string(),
+            latest_version: tag.trim().trim_start_matches(['v', 'V']).to_string(),
+            release_url: url.to_string(),
+            update_available: latest > current,
+        })
     }
 
     pub fn clear_cache(&self) -> Result<()> {
@@ -543,8 +687,8 @@ impl VrcApiClient {
     }
 }
 
-// Simple deterministic hash for file caching
-fn md5_hash(bytes: &[u8]) -> u128 {
+// Simple deterministic FNV-1a hash for file caching
+fn fnv1a_hash(bytes: &[u8]) -> u128 {
     let mut hash: u128 = 0xcbf29ce484222325;
     for &b in bytes {
         hash ^= b as u128;

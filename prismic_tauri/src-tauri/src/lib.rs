@@ -70,6 +70,7 @@ pub fn run() {
             commands::open_in_browser,
             commands::get_app_settings,
             commands::update_app_settings,
+            commands::check_for_updates,
             commands::clear_image_cache,
             commands::toggle_favorite,
             commands::get_favorite_ids,

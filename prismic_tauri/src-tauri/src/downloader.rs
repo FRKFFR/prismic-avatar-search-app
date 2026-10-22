@@ -436,32 +436,32 @@ where
         PRAGMA temp_store = MEMORY;
     ")?;
 
-    conn.execute("DROP TABLE IF EXISTS avatars", [])?;
-    conn.execute(
-        "CREATE TABLE avatars (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            author TEXT NOT NULL,
-            description TEXT,
-            avatar_id TEXT NOT NULL,
-            tags TEXT,
-            quest INTEGER DEFAULT 0,
-            ios INTEGER DEFAULT 0,
-            platform INTEGER DEFAULT 0,
-            impostor_platform INTEGER DEFAULT 0,
-            pc_rating INTEGER DEFAULT 0,
-            quest_rating INTEGER DEFAULT 0,
-            ios_rating INTEGER DEFAULT 0,
-            content_warnings INTEGER DEFAULT 0,
-            style_filter INTEGER DEFAULT 0,
-            marketplace INTEGER DEFAULT 0
-        )",
-        [],
-    )?;
-
     let total_entries = processed.entries.len();
     {
+        // Rebuild inside one transaction so readers keep seeing the old table until commit.
         let tx = conn.transaction()?;
+        tx.execute("DROP TABLE IF EXISTS avatars", [])?;
+        tx.execute(
+            "CREATE TABLE avatars (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                author TEXT NOT NULL,
+                description TEXT,
+                avatar_id TEXT NOT NULL,
+                tags TEXT,
+                quest INTEGER DEFAULT 0,
+                ios INTEGER DEFAULT 0,
+                platform INTEGER DEFAULT 0,
+                impostor_platform INTEGER DEFAULT 0,
+                pc_rating INTEGER DEFAULT 0,
+                quest_rating INTEGER DEFAULT 0,
+                ios_rating INTEGER DEFAULT 0,
+                content_warnings INTEGER DEFAULT 0,
+                style_filter INTEGER DEFAULT 0,
+                marketplace INTEGER DEFAULT 0
+            )",
+            [],
+        )?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO avatars (

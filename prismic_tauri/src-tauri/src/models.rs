@@ -126,3 +126,11 @@ pub struct AvatarOnlineDetails {
 pub struct AppSettings {
     pub show_old_images: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub release_url: String,
+    pub update_available: bool,
+}
