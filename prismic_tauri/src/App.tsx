@@ -74,15 +74,23 @@ function MainApp() {
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
 
   // Search execution
+  const searchSeq = useRef(0);
   const executeSearch = useCallback(async (currentFilter: SearchFilter) => {
+    const seq = ++searchSeq.current;
     setIsLoading(true);
     try {
       const result = await api.searchAvatars(currentFilter);
-      setSearchResult(result);
+      if (seq === searchSeq.current) {
+        setSearchResult(result);
+      }
     } catch (err: any) {
-      showToast(`Search error: ${err?.message || err}`, 'error');
+      if (seq === searchSeq.current) {
+        showToast(`Search error: ${err?.message || err}`, 'error');
+      }
     } finally {
-      setIsLoading(false);
+      if (seq === searchSeq.current) {
+        setIsLoading(false);
+      }
     }
   }, [showToast]);
 

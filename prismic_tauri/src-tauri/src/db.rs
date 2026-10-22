@@ -233,8 +233,8 @@ impl DbManager {
 
         let total: usize = conn.query_row(&count_sql, params_slice.as_slice(), |r| r.get(0))?;
 
-        let page_size = if filter.page_size == 0 { 24 } else { filter.page_size };
-        let offset = filter.page * page_size;
+        let page_size = if filter.page_size == 0 { 24 } else { filter.page_size.min(500) };
+        let offset = filter.page.saturating_mul(page_size);
         let total_pages = (total + page_size - 1) / page_size;
 
         // 2. Paginated data query
