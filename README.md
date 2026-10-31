@@ -1,3 +1,5 @@
+<p align="center"><img src="images/logo.svg" alt="Prismic's Avatar Search logo" width="128" height="128"></p>
+
 # 🎭 Prismic's Avatar Search
 
 A fast, modern desktop app for searching, browsing, and equipping VRChat avatars — built with **Tauri v2**, **Rust**, **React 19**, **Tailwind CSS**, and **SQLite**.
