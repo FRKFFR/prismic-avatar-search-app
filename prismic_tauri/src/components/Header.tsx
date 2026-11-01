@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Database, User, LogIn, LogOut, RefreshCw, X, Sparkles, Settings, SlidersHorizontal, Star } from 'lucide-react';
+import { Search, Database, User, LogIn, LogOut, RefreshCw, X, Settings, SlidersHorizontal, Star } from 'lucide-react';
 import type { DatabaseStatus, UserProfile } from '../types';
 
 interface HeaderProps {
@@ -50,9 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Brand Logo & Title */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-purple-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 ring-1 ring-white/10">
-            <Sparkles className="w-5 h-5 text-white animate-pulse" />
-          </div>
+          <img src="/logo.svg" alt="" className="w-10 h-10 drop-shadow-lg" draggable={false} />
           <div>
             <h1 className="text-base font-bold bg-gradient-to-r from-cyan-400 via-teal-300 to-purple-400 bg-clip-text text-transparent leading-tight tracking-wide">
               Prismic Avatar Search
